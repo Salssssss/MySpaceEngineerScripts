@@ -13,6 +13,7 @@ using VRage.Game.GUI.TextPanel;
 using VRage.Game.ModAPI.Ingame;
 using VRage.Game.ObjectBuilders.Definitions;
 using SpaceEngineers.Game.ModAPI.Ingame;
+using System.Collections.Generic;
 
 /*
  * Must be unique per each script project.
@@ -33,30 +34,44 @@ public sealed class Program : MyGridProgram {
     #region SolarTracker
 
 IMyMotorStator azimuthRotor;
-IMyMotorStator elevationRotor;
-IMySolarPanel solarPanel;
-
-float lastOutput = 0f;
-
+IMyMotorStator elevationHinge;
+IMySolarPanel elevationPanel;
+IMySolarPanel azimuthPanel;
+IMyBlockGroup solarHingesGroup;
+IMyBlockGroup solarRotorsGroup;
+List<IMyMotorStator> mySolarHinges;
+List<IMyMotorStator> mySolarRotors;
+float lastAzimuthOutput = 0f;
+float lastElevationOutput = 0f;
 // Tracking directions
 int azimuthDirection = 1;
 int elevationDirection = 1;
 
 // Settings
-const float rpm = 0.3f;
-const float stepDelaySeconds = 1.0f; // How often to check output and change direction
+const float rpm = 0.05f;
+const float stepDelaySeconds = 0.5f; // How often to check output and change direction
 double lastStepTime = 0;
 
 public Program()
 {
     azimuthRotor = GridTerminalSystem.GetBlockWithName("Azimuth Rotor") as IMyMotorStator;
-    elevationRotor = GridTerminalSystem.GetBlockWithName("Elevation Rotor") as IMyMotorStator;
-    solarPanel = GridTerminalSystem.GetBlockWithName("Tracked Panel") as IMySolarPanel;
+    elevationHinge = GridTerminalSystem.GetBlockWithName("Elevation Hinge") as IMyMotorStator;
+    azimuthPanel = GridTerminalSystem.GetBlockWithName("Azimuth Panel") as IMySolarPanel;
+    elevationPanel = GridTerminalSystem.GetBlockWithName("Elevation Panel") as IMySolarPanel;
+    solarHingesGroup = GridTerminalSystem.GetBlockGroupWithName("Solar Hinges") as IMyBlockGroup;
+    solarRotorsGroup = GridTerminalSystem.GetBlockGroupWithName("Solar Rotors") as IMyBlockGroup;
 
-    if (azimuthRotor == null || elevationRotor == null || solarPanel == null)
+    if (azimuthRotor == null || elevationHinge == null || azimuthPanel == null || elevationPanel == null)
     {
         Echo("Missing one or more components!");
         return;
+    }
+
+    if (solarHingesGroup != null && solarRotorsGroup != null){
+        mySolarHinges = new List<IMyMotorStator>();
+        solarHingesGroup.GetBlocksOfType(mySolarHinges);
+        mySolarRotors = new List<IMyMotorStator>();
+        solarRotorsGroup.GetBlocksOfType(mySolarRotors);
     }
 
     Runtime.UpdateFrequency = UpdateFrequency.Update10;
@@ -65,26 +80,62 @@ public Program()
 
 public void Main(string argument, UpdateType updateSource)
 {
-    if (azimuthRotor == null || elevationRotor == null || solarPanel == null)
+    if (azimuthRotor == null || elevationHinge == null || azimuthPanel == null || elevationPanel == null)
     {
-        Echo("Missing blocks");
+        Echo("Missing components");
         return;
-    }
+    } 
 
     double now = Runtime.TimeSinceLastRun.TotalSeconds + lastStepTime;
+    float azimuthOutput = azimuthPanel.MaxOutput;
+    float elevationOutput = elevationPanel.MaxOutput;
 
-    if (now >= stepDelaySeconds)
+    if (elevationOutput == 0 && azimuthOutput == 0)
     {
-        float currentOutput = solarPanel.CurrentOutput;
+        Echo("No Solar Output Returning To Home Position.");
+        Echo($"Hinge angle: {elevationHinge.Angle * (180f / (float)Math.PI):F2}°");
 
-        // Reverse direction if output decreased
-        if (currentOutput < lastOutput)
+        ResetToZero(azimuthRotor);
+        ResetToZero(elevationHinge);
+
+        foreach (var hinge in mySolarHinges)
         {
-            azimuthDirection *= -1;
-            elevationDirection *= -1;
+            ResetToZero(hinge);
         }
 
-        lastOutput = currentOutput;
+        foreach (var rotor in mySolarRotors)
+        {
+            ResetToZero(rotor);
+        }
+
+    }
+    else if (now >= stepDelaySeconds)
+    {
+
+        // Reverse azimuth direction if output decreased
+        if (azimuthOutput < lastAzimuthOutput)
+        {
+            azimuthDirection *= -1;
+        } 
+        lastAzimuthOutput = azimuthOutput;      
+        // Reverse elevation direction if output decreased
+        if (elevationOutput < lastElevationOutput)
+        {
+            elevationDirection *= -1;
+        } 
+        lastElevationOutput = elevationOutput;
+        // Apply rotation
+        azimuthRotor.TargetVelocityRPM = azimuthDirection * rpm;
+        elevationHinge.TargetVelocityRPM = elevationDirection * rpm;
+
+        //Apply rotation to the rest of the grid
+        foreach(var hinge in mySolarHinges){
+            hinge.TargetVelocityRPM = elevationDirection * rpm;
+        }
+        foreach(var rotor in mySolarRotors){
+            rotor.TargetVelocityRPM = azimuthDirection * rpm;
+        }
+
         lastStepTime = 0;
     }
     else
@@ -92,14 +143,37 @@ public void Main(string argument, UpdateType updateSource)
         lastStepTime += Runtime.TimeSinceLastRun.TotalSeconds;
     }
 
-    // Apply rotation
-    azimuthRotor.TargetVelocityRPM = azimuthDirection * rpm;
-    elevationRotor.TargetVelocityRPM = elevationDirection * rpm;
 
-    Echo($"Output: {solarPanel.CurrentOutput:F2} kW");
+    Echo($"Azimuth Output: {azimuthPanel.MaxOutput * 1000} kW");
+    Echo($"Elevation Output: {elevationPanel.MaxOutput * 1000} kW");
     Echo($"Az Dir: {azimuthDirection}, Elv Dir: {elevationDirection}");
-}
 
+}
+void ResetToZero(IMyMotorStator rotor, float speedRpm = 0.3f, float toleranceDeg = 1f)
+{
+    float angleDeg = rotor.Angle * (180f / (float)Math.PI);
+
+
+    // Safety net: if we're already close, stop
+    if (Math.Abs(angleDeg) < toleranceDeg)
+    {
+        rotor.TargetVelocityRPM = 0f;
+        return;
+    }
+
+    // Determine which direction is closer to 0
+    float direction = -Math.Sign(angleDeg); // if angle is positive, go negative, and vice versa
+
+
+    if (!(angleDeg < toleranceDeg))
+    {
+        rotor.TargetVelocityRPM = direction * speedRpm;
+    }
+    else
+    {
+        rotor.TargetVelocityRPM = 0f; // Stop if movement 
+    }
+}
 
 
     #endregion // SolarTracker

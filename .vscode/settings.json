@@ -4,5 +4,11 @@
     "obj/": true,
     "SpaceEngineers.sln": true
   },
-  "dotnet.server.useOmnisharp": true
+  "dotnet.server.useOmnisharp": true,
+  "github.copilot.enable": {
+    "*": false,
+    "plaintext": false,
+    "markdown": false,
+    "scminput": false
+  }
 }
