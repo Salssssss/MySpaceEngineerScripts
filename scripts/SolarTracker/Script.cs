@@ -93,7 +93,6 @@ public void Main(string argument, UpdateType updateSource)
     if (elevationOutput == 0 && azimuthOutput == 0)
     {
         Echo("No Solar Output Returning To Home Position.");
-        Echo($"Hinge angle: {elevationHinge.Angle * (180f / (float)Math.PI):F2}°");
 
         ResetToZero(azimuthRotor);
         ResetToZero(elevationHinge);
@@ -152,20 +151,9 @@ public void Main(string argument, UpdateType updateSource)
 void ResetToZero(IMyMotorStator rotor, float speedRpm = 0.3f, float toleranceDeg = 1f)
 {
     float angleDeg = rotor.Angle * (180f / (float)Math.PI);
-
-
-    // Safety net: if we're already close, stop
-    if (Math.Abs(angleDeg) < toleranceDeg)
-    {
-        rotor.TargetVelocityRPM = 0f;
-        return;
-    }
-
-    // Determine which direction is closer to 0
     float direction = -Math.Sign(angleDeg); // if angle is positive, go negative, and vice versa
 
-
-    if (!(angleDeg < toleranceDeg))
+    if (!(Math.Abs(angleDeg) < toleranceDeg))
     {
         rotor.TargetVelocityRPM = direction * speedRpm;
     }
